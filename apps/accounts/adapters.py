@@ -1,6 +1,7 @@
 """allauth adapters."""
 
 import logging
+import os
 import smtplib
 from typing import Any
 
@@ -9,7 +10,31 @@ from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.contrib import messages
 from django.http import HttpRequest
 
+from apps.members.models import Invitation
+from apps.members.signals_keys import PENDING_INVITE_SESSION_KEY
+
 logger = logging.getLogger(__name__)
+
+def signup_is_allowed(request):
+    """Allow public signup only when enabled, or with a valid invitation."""
+
+    if os.getenv("ALLOW_PUBLIC_SIGNUP", "false").lower() == "true":
+        return True
+
+    if request is None:
+        return False
+
+    token = request.session.get(PENDING_INVITE_SESSION_KEY)
+    if not token:
+        return False
+
+    invitation = (
+        Invitation.objects.for_token(token)
+        .filter(accepted_at__isnull=True)
+        .first()
+    )
+
+    return bool(invitation and not invitation.is_expired)
 
 
 class AccountAdapter(DefaultAccountAdapter):
@@ -35,6 +60,9 @@ class AccountAdapter(DefaultAccountAdapter):
 
     Studio has no account adapter at all; it ships ``"none"`` and never sends.
     """
+
+    def is_open_for_signup(self, request):
+        return signup_is_allowed(request)
 
     def add_message(
         self,
@@ -100,6 +128,9 @@ class SocialAccountAdapter(DefaultSocialAccountAdapter):
     Ported from Studio's adapter minus its ``OAuthConnection`` bookkeeping —
     that model duplicates allauth's own ``SocialAccount`` table.
     """
+
+    def is_open_for_signup(self, request, sociallogin):
+        return signup_is_allowed(request)
 
     def populate_user(self, request: Any, sociallogin: Any, data: dict[str, Any]) -> Any:
         user = super().populate_user(request, sociallogin, data)

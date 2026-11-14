@@ -6,6 +6,7 @@
 
 x-app-environment: &app-environment
   DJANGO_SETTINGS_MODULE: config.settings.production
+  ALLOW_PUBLIC_SIGNUP: ${ALLOW_PUBLIC_SIGNUP:-false}
 
   DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-brightbean}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brightbean_chat}}
 
