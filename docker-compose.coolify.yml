@@ -1,0 +1,122 @@
+
+# BrightBean Chat - Coolify Production Deployment
+# Domain: https://auto.apptechcare.com
+# HTTPS: Managed by Coolify / Traefik
+# No public database or application ports
+
+x-app-environment: &app-environment
+  DJANGO_SETTINGS_MODULE: config.settings.production
+
+  DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-brightbean}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brightbean_chat}}
+
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+  ENCRYPTION_KEY_SALT: ${ENCRYPTION_KEY_SALT:?Set ENCRYPTION_KEY_SALT}
+
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:-auto.apptechcare.com}
+  APP_URL: ${APP_URL:-https://auto.apptechcare.com}
+
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
+  DJANGO_ENV_FILE: /nonexistent
+
+x-app-service: &app-service
+  build: .
+  image: ${IMAGE_REPOSITORY:-brightbean-chat}:${IMAGE_TAG:-latest}
+  environment: *app-environment
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-brightbean_chat}
+      POSTGRES_USER: ${POSTGRES_USER:-brightbean}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-brightbean} -d ${POSTGRES_DB:-brightbean_chat}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  migrate:
+    <<: *app-service
+    command:
+      - python
+      - manage.py
+      - migrate
+      - --noinput
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *app-service
+
+    # Coolify routes HTTPS traffic to this service
+    labels:
+      - coolify.managed=true
+
+    command:
+      - gunicorn
+      - config.wsgi:application
+      - --bind
+      - 0.0.0.0:8000
+      - --workers
+      - "4"
+      - --threads
+      - "2"
+
+    expose:
+      - "8000"
+
+    volumes:
+      - media_data:/app/media
+
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request as r; from urllib.parse import urlparse; h = urlparse(os.environ['APP_URL']).hostname; r.urlopen(r.Request('http://127.0.0.1:8000/healthz', headers={'Host': h}), timeout=4)"
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
+
+    restart: unless-stopped
+
+  worker:
+    <<: *app-service
+
+    command:
+      - python
+      - manage.py
+      - process_tasks
+
+    volumes:
+      - media_data:/app/media
+
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  media_data:
